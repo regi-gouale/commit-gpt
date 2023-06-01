@@ -88,3 +88,44 @@ while True:
         break
     elif user_input == "y":
         break
+
+while True:
+    try:
+        COMMIT_PROMPT = "\n".join(modified_files + [summary_message])
+        response_commit = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": COMMIT_CONTEXT},
+                {"role": "user", "content": COMMIT_PROMPT},
+            ],
+            temperature=0.7,
+        )
+        commit_message = response_commit.choices[-1].message.content.strip()
+    except Exception as e:
+        error_message = str(e)
+        console.print('''[bold red]GPT-3.5 Turbo n'a pas pu générer de message de commit.[/bold red]''')
+        console.print(error_message)
+        commit_message = input("Veuillez entrer un message de commit: ")
+
+    console.print('''[bold green]Message de commit:[/bold green]''')
+    console.print(commit_message)
+
+    user_input = input(
+        """Est-ce que le message de commit vous convient? 
+        (y) Oui, (r) Regénérer, (c) Choisir le message de commit : """
+        )
+    if user_input == "y":
+        if modified_files:
+            repo.git.commit(message=commit_message)
+            console.print('''[bold green]Commit effectué avec succès![/bold green]''')
+        break
+    elif user_input == "n":
+        summary_message=response_summary.choices[-1].message.content.strip()
+    elif user_input == "q":
+        # commit_message = input("Veuillez entrer un message de commit: ")
+        break
+    else:
+        console.print(
+            '''[bold red]Veuillez entrer une option valide.[/bold red]'''
+        )
+
