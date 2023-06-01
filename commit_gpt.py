@@ -83,9 +83,8 @@ while True:
         break
     elif user_input == "y":
         break
-    
+
 while True:
-    
     try:
         # Générer le message de commit avec GPT-3.5 Turbo en utilisant le résumé et les fichiers modifiés
         commit_prompt = "\n".join(modified_files + [summary_message])
