@@ -263,8 +263,6 @@ def main() -> None:
         diffs=diffs,
         context=os.getenv("SUMMARY_CONTEXT")
     )
-    print_to_console(console, "Résumé des modifications:", 'info')
-    print_to_console(console, summary_message)
 
     commit_message = generate_commit_message(
         console=console,
@@ -272,8 +270,6 @@ def main() -> None:
         summary_message=summary_message,
         context=os.getenv("COMMIT_CONTEXT")
     )
-    print_to_console(console, "Message de commit:", 'info')
-    print_to_console(console, commit_message)
 
     commit_and_push(
         console=console,
