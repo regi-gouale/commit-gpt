@@ -10,122 +10,277 @@ from git.repo import Repo
 from dotenv import load_dotenv
 from rich.console import Console
 
-load_dotenv()
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
-openai.organization = os.getenv("OPENAI_ORGANIZATION")
+def check_environment_variables() -> None:
+    '''Check if environment variables are set'''
+    if not os.getenv("OPENAI_API_KEY"):
+        raise ValueError("OPENAI_API_KEY is not set")
+    if not os.getenv("OPENAI_ORGANIZATION"):
+        raise ValueError("OPENAI_ORGANIZATION is not set")
+    if not os.getenv("SUMMARY_CONTEXT"):
+        raise ValueError("SUMMARY_CONTEXT is not set")
+    if not os.getenv("COMMIT_CONTEXT"):
+        raise ValueError("COMMIT_CONTEXT is not set")
 
-SUMMARY_CONTEXT = os.getenv("SUMMARY_CONTEXT")
-COMMIT_CONTEXT = os.getenv("COMMIT_CONTEXT")
 
-os.system('cls' if os.name == 'nt' else 'clear')
+def connect_to_openai() -> None:
+    '''Connect to OpenAI API'''
+    openai.api_key = os.getenv("OPENAI_API_KEY")
+    openai.organization = os.getenv("OPENAI_ORGANIZATION")
 
-console = Console()
 
-console.print('''[bold cyan]Démarrage de CommitGPT...[/bold cyan]''')
+def clear_screen() -> None:
+    '''Clear the screen'''
+    os.system('cls' if os.name == 'nt' else 'clear')
 
-if len(sys.argv) > 1:
-    REPO_PATH = sys.argv[1]
-else:
-    REPO_PATH = os.path.dirname(os.path.realpath(__file__))
 
-repo = Repo(REPO_PATH)
+def print_to_console(
+        output: Console,
+        text: str,
+        type_of_message: str = '_') -> None:
+    '''Print text to console'''
+    style = 'normal white'
+    match type_of_message:
+        case 'info':
+            style = 'bold blue'
+        case 'success':
+            style = 'bold green'
+        case 'warning':
+            style = 'bold yellow'
+        case 'error':
+            style = 'bold red'
+        case _:
+            style = 'default on default'
 
-modified_files = [item.a_path for item in repo.index.diff("HEAD")]
-if not modified_files:
-    console.print(
-        '''[bold red]Aucun fichier modifié n'a été trouvé. 
-        Veuillez utiliser git add pour ajouter des fichiers.[/bold red]'''
-    )
-    sys.exit()
+    output.print(text, style=style)
 
-diffs = []
-for file in modified_files:
-    if not os.path.exists(file):
-        diff = repo.git.diff("HEAD", file)
-        diffs.append(diff)
-    else:
-        diff_output = repo.git.diff("HEAD", file)
-        lines = diff_output.split('\n')
-        diffs.append(
-            '\n'.join(
-                line for line in lines if line.startswith(
-                    ('+', '-')
-                ) and not line.startswith(
-                    ('---', '+++')
-                )
+
+def get_repo_path_from_argument() -> str:
+    '''Get repo path from argument'''
+    number_of_arguments = len(sys.argv)
+
+    match number_of_arguments:
+        case 2:
+            return sys.argv[1]
+        case 1:
+            return os.path.dirname(os.path.realpath('__file__'))
+        case _:
+            raise ValueError(
+                "Utilisation: python commit_gpt.py [path]"
             )
+
+
+def get_repo(repo_path: str) -> Repo:
+    '''Get repo'''
+    return Repo(repo_path)
+
+
+def get_modified_files(repo: Repo) -> list[str]:
+    '''Get modified files
+    Args:
+        repo (Repo): Git repository
+    Returns:
+        list[str]: List of modified files
+
+    Check for any modified files in the Git repository by comparing the current state of
+    the repository with the HEAD commit. It does this by using the `diff` method of the 
+    `index` object of the `repo` object, which returns a list of `DiffIndex` objects 
+    representing the changes between the two states. The list comprehension `[item.a_path
+    for item in repo.index.diff("HEAD")]` extracts the path of each modified file from the 
+    `DiffIndex` objects and stores them in the `modified_files` list.
+    '''
+    return [item.a_path for item in repo.index.diff("HEAD")]
+
+
+def stop_if_no_modified_file(console: Console, modified_files: list[str]) -> None:
+    '''Check for modified files'''
+    if not modified_files:
+        print_to_console(
+            console,
+            '''Aucun fichier modifié n'a été trouvé. 
+            Veuillez utiliser git add pour ajouter des fichiers.''',
+            'error'
+        )
+        raise ValueError(
+            '''Aucun fichier modifié n'a été trouvé. 
+            Veuillez utiliser git add pour ajouter des fichiers.'''
         )
 
-console.print('''[bold green]Fichiers modifiés:[/bold green]''')
-console.print('\n'.join(modified_files))
 
-while True:
-    try:
-        SUMMARY_PROMPT = "\n".join(diffs)
+def get_diffs(repo: Repo, modified_files: list[str]) -> list[str]:
+    '''Get diffs'''
+    diffs = []
+    for file in modified_files:
+        if not os.path.exists(file):
+            diff = repo.git.diff("HEAD", file)
+            diffs.append(diff)
+        else:
+            diff_output = repo.git.diff("HEAD", file)
+            lines = diff_output.split('\n')
+            diffs.append(
+                '\n'.join(
+                    line for line in lines if line.startswith(
+                        ('+', '-')
+                    ) and not line.startswith(
+                        ('---', '+++')
+                    )
+                )
+            )
+    return diffs
+
+
+def generate_summary(console: Console, diffs: list[str], context: str) -> str:
+    '''Get summary'''
+    while True:
+        summary_prompt = "\n".join(diffs)
         response_summary = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": SUMMARY_CONTEXT},
-                {"role": "user", "content": SUMMARY_PROMPT},
+                {'role': 'system', 'content': context},
+                {'role': 'user', 'content': summary_prompt}
             ],
             temperature=0.7,
+            max_tokens=100,
         )
+
         summary_message = response_summary.choices[-1].message.content.strip()
-    except Exception as e:
-        error_message = str(e)
-        console.print('''[bold red]GPT-3.5 Turbo n'a pas pu générer de résumé.[/bold red]''')
-        console.print(error_message)
-        summary_message = input("Veuillez entrer un résumé: ")
 
-    console.print('''[bold green]Résumé des modifications:[/bold green]''')
-    console.print(summary_message)
-    user_input = input("Est-ce que le résumé vous convient? (y) Oui, (r) Regénérer, (c) Choisir le résumé : ")
-    if user_input == "n":
-        continue
-    elif user_input == "c":
-        summary_message = input("Veuillez entrer un résumé: ")
-        break
-    elif user_input == "y":
-        break
+        print_to_console(
+            output=console,
+            text='Résumé des modifications:',
+            type_of_message='success'
+        )
+        print_to_console(output=console, text=summary_message)
 
-while True:
-    try:
-        COMMIT_PROMPT = "\n".join(modified_files + [summary_message])
+        user_input = input(
+            'Le résumé vous convient-il? (o/n) [default: n] ')
+        if not user_input:
+            user_input = 'n'
+
+        match user_input:
+            case 'o':
+                return summary_message
+            case 'n':
+                continue
+            case _:
+                continue
+
+
+def generate_commit_message(
+        console: Console,
+        modified_files: list[str],
+        summary_message: str,
+        context: str) -> str:
+    '''Get commit message'''
+    while True:
+        commit_prompt = "\n".join(modified_files + [summary_message])
         response_commit = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": COMMIT_CONTEXT},
-                {"role": "user", "content": COMMIT_PROMPT},
+                {'role': 'system', 'content': context},
+                {'role': 'user', 'content': commit_prompt}
             ],
             temperature=0.7,
+            max_tokens=100,
         )
         commit_message = response_commit.choices[-1].message.content.strip()
-    except Exception as e:
-        error_message = str(e)
-        console.print('''[bold red]GPT-3.5 Turbo n'a pas pu générer de message de commit.[/bold red]''')
-        console.print(error_message)
-        commit_message = input("Veuillez entrer un message de commit: ")
 
-    console.print('''[bold green]Message de commit:[/bold green]''')
-    console.print(commit_message)
-
-    user_input = input(
-        """Est-ce que le message de commit vous convient? 
-        (y) Oui, (r) Regénérer, (c) Choisir le message de commit : """
+        print_to_console(
+            output=console,
+            text='Message de commit:',
+            type_of_message='success'
         )
-    if user_input == "y":
-        if modified_files:
-            repo.git.commit(message=commit_message)
-            console.print('''[bold green]Commit effectué avec succès![/bold green]''')
-        break
-    elif user_input == "n":
-        summary_message=response_summary.choices[-1].message.content.strip()
-    elif user_input == "q":
-        # commit_message = input("Veuillez entrer un message de commit: ")
-        break
-    else:
-        console.print(
-            '''[bold red]Veuillez entrer une option valide.[/bold red]'''
-        )
+        print_to_console(output=console, text=commit_message)
 
+        user_input = input(
+            'Le message de commit vous convient-il? (o/n) [default: n] ')
+        if not user_input:
+            user_input = 'n'
+
+        match user_input:
+            case 'o':
+                return commit_message
+            case 'n':
+                continue
+            case _:
+                continue
+
+
+def commit_and_push(
+        console: Console,
+        repo: Repo,
+        commit_message: str) -> None:
+    '''Commit and push'''
+    print_to_console(
+        output=console,
+        text='Commit en cours...',
+        type_of_message='info'
+    )
+    repo.git.commit(message=commit_message)
+    origin = repo.remote(name='origin')
+    origin.push()
+    print_to_console(
+        output=console,
+        text='Commit terminé.',
+        type_of_message='success'
+    )
+
+
+def main() -> None:
+    '''Main function'''
+    console = Console()
+    clear_screen()
+
+    print_to_console(
+        output=console,
+        text="Bienvenue dans Commit GPT",
+        type_of_message='info'
+    )
+
+    load_dotenv()
+    check_environment_variables()
+
+    connect_to_openai()
+
+    repo_path = get_repo_path_from_argument()
+    repo = get_repo(repo_path=repo_path)
+
+    modified_files = get_modified_files(repo=repo)
+    stop_if_no_modified_file(
+        console=console,
+        modified_files=modified_files
+    )
+
+    print_to_console(console, "Fichiers modifiés:", 'info')
+    print_to_console(console, '\n'.join(modified_files))
+
+    diffs = get_diffs(repo, modified_files)
+    print_to_console(console, "Différences:", 'info')
+    print_to_console(console, '\n'.join(diffs))
+
+    summary_message = generate_summary(
+        console=console,
+        diffs=diffs,
+        context=os.getenv("SUMMARY_CONTEXT")
+    )
+    print_to_console(console, "Résumé des modifications:", 'info')
+    print_to_console(console, summary_message)
+
+    commit_message = generate_commit_message(
+        console=console,
+        modified_files=modified_files,
+        summary_message=summary_message,
+        context=os.getenv("COMMIT_CONTEXT")
+    )
+    print_to_console(console, "Message de commit:", 'info')
+    print_to_console(console, commit_message)
+
+    commit_and_push(
+        console=console,
+        repo=repo,
+        commit_message=commit_message,
+    )
+
+
+if __name__ == "__main__":
+    main()
